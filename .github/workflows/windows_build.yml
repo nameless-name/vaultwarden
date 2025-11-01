@@ -8,6 +8,8 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: 检查工具版本
         run: git version && cargo --version && vcpkg version
 
