@@ -1,4 +1,4 @@
-name: Vaultwarden Build
+name: Windows Build
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - name: 检查工具版本
-        run: git version && cargo version && vcpkg version
+        run: git version && cargo --version && vcpkg version
 
       - name: 下载 web-vault
         run: |
@@ -47,12 +47,11 @@ jobs:
 
       - name: 编译 vaultwarden
         run: cargo build --features sqlite --release
-        working-directory: vaultwarden
         env:
           RUSTFLAGS: "-Ctarget-feature=+crt-static"
 
       - name: 移动文件
-        run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
+        run: move .\target\release\vaultwarden.exe .\vaultwarden.exe
 
       - name: 版本信息
         id: get_version
