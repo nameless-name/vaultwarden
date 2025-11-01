@@ -1,0 +1,76 @@
+name: Vaultwarden Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检查工具版本
+        run: git version && cargo version && vcpkg version
+
+      - name: 下载 web-vault
+        run: |
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest"
+          $Asset = $Release.assets | Where-Object { $_.name -like "*.tar.gz" }
+
+          if (-not $Asset) {
+            Write-Error "No .tar.gz asset found."
+            exit 1
+          }
+
+          $DownloadUrl = $Asset.browser_download_url
+          $FileName = $Asset.name
+          $OutPath = "web-vault"
+
+          Write-Host "Downloading $FileName..."
+          Invoke-WebRequest -Uri $DownloadUrl -OutFile $FileName
+
+          Write-Host "Extracting..."
+          tar -xf $FileName
+
+      - name: 配置 vcpkg 缓存
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: 使用 vcpkg 安装依赖
+        run: |
+          vcpkg integrate install
+          vcpkg install openssl:x64-windows-static
+        env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+      - name: 编译 vaultwarden
+        run: cargo build --features sqlite --release
+        working-directory: vaultwarden
+        env:
+          RUSTFLAGS: "-Ctarget-feature=+crt-static"
+
+      - name: 移动文件
+        run: move .\vaultwarden\target\release\vaultwarden.exe .\vaultwarden.exe
+
+      - name: 版本信息
+        id: get_version
+        run: |
+          $version_output = .\vaultwarden.exe -v
+          $vaultwarden_version = ($version_output | Select-String -Pattern "Vaultwarden (\S+)").Matches.Groups[1].Value
+          $web_vault_version = ($version_output | Select-String -Pattern "Web-Vault (\S+)").Matches.Groups[1].Value
+
+          echo "Vaultwarden version: $vaultwarden_version"
+          echo "Web-Vault version: $web_vault_version"
+
+          echo "vaultwarden_version=$vaultwarden_version" >> $env:GITHUB_OUTPUT
+          echo "web_vault_version=$web_vault_version" >> $env:GITHUB_OUTPUT
+
+      - name: 打包文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vaultwarden_${{ steps.get_version.outputs.vaultwarden_version }}_${{ steps.get_version.outputs.web_vault_version }}
+          path: |
+            vaultwarden.exe
+            web-vault
