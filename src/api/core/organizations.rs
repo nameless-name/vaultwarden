@@ -929,9 +929,13 @@ struct OrgIdData {
 }
 
 #[get("/ciphers/organization-details?<data..>")]
-async fn get_org_details(data: OrgIdData, headers: OrgMemberHeaders, conn: DbConn) -> JsonResult {
+async fn get_org_details(data: OrgIdData, headers: ManagerHeadersLoose, conn: DbConn) -> JsonResult {
     if data.organization_id != headers.membership.org_uuid {
         err_code!("Resource not found.", "Organization id's do not match", rocket::http::Status::NotFound.code);
+    }
+
+    if !headers.membership.has_full_access() {
+        err_code!("Resource not found.", "User does not have full access", rocket::http::Status::NotFound.code);
     }
 
     Ok(Json(json!({
@@ -3207,7 +3211,7 @@ async fn put_reset_password(
 
     // Sending email before resetting password to ensure working email configuration and the resulting
     // user notification. Also this might add some protection against security flaws and misuse
-    if let Err(e) = mail::send_admin_reset_password(&user.email, &user.name, &org.name).await {
+    if let Err(e) = mail::send_admin_reset_password(&user.email, user.display_name(), &org.name).await {
         err!(format!("Error sending user reset password email: {e:#?}"));
     }
 

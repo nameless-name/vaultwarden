@@ -1,6 +1,12 @@
 name: Release
 permissions: {}
 
+concurrency:
+  # Apply concurrency control only on the upstream repo
+  group: ${{ github.repository == 'dani-garcia/vaultwarden' && format('{0}-{1}', github.workflow, github.ref) || github.run_id }}
+  # Don't cancel other runs when creating a tag
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
 on:
   push:
     branches:
@@ -9,12 +15,6 @@ on:
     tags:
       # https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#filter-pattern-cheat-sheet
       - '[1-2].[0-9]+.[0-9]+'
-
-concurrency:
-  # Apply concurrency control only on the upstream repo
-  group: ${{ github.repository == 'dani-garcia/vaultwarden' && format('{0}-{1}', github.workflow, github.ref) || github.run_id }}
-  # Don't cancel other runs when creating a tag
-  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 defaults:
   run:
@@ -102,7 +102,7 @@ jobs:
 
       # Login to Docker Hub
       - name: Login to Docker Hub
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -117,7 +117,7 @@ jobs:
 
       # Login to GitHub Container Registry
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -133,7 +133,7 @@ jobs:
 
       # Login to Quay.io
       - name: Login to Quay.io
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
@@ -233,7 +233,7 @@ jobs:
 
       # Upload artifacts to Github Actions and Attest the binaries
       - name: Attest binaries
-        uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8 # v3.1.0
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-path: vaultwarden-${{ env.NORMALIZED_ARCH }}
 
@@ -265,7 +265,7 @@ jobs:
 
       # Login to Docker Hub
       - name: Login to Docker Hub
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -280,7 +280,7 @@ jobs:
 
       # Login to GitHub Container Registry
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -296,7 +296,7 @@ jobs:
 
       # Login to Quay.io
       - name: Login to Quay.io
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
@@ -313,45 +313,43 @@ jobs:
       # Determine Base Tags
       - name: Determine Base Tags
         env:
+          BASE_IMAGE_TAG: "${{ matrix.base_image != 'debian' && format('-{0}', matrix.base_image) || '' }}"
           REF_TYPE: ${{ github.ref_type }}
         run: |
           # Check which main tag we are going to build determined by ref_type
           if [[ "${REF_TYPE}" == "tag" ]]; then
-            echo "BASE_TAGS=latest,${GITHUB_REF#refs/*/}" | tee -a "${GITHUB_ENV}"
+            echo "BASE_TAGS=latest${BASE_IMAGE_TAG},${GITHUB_REF#refs/*/}${BASE_IMAGE_TAG}${BASE_IMAGE_TAG//-/,}" | tee -a "${GITHUB_ENV}"
           elif [[ "${REF_TYPE}" == "branch" ]]; then
-            echo "BASE_TAGS=testing" | tee -a "${GITHUB_ENV}"
+            echo "BASE_TAGS=testing${BASE_IMAGE_TAG}" | tee -a "${GITHUB_ENV}"
           fi
 
       - name: Create manifest list, push it and extract digest SHA
         working-directory: ${{ runner.temp }}/digests
         env:
-          BASE_IMAGE_TAG: "${{ matrix.base_image != 'debian' && format('-{0}', matrix.base_image) || '' }}"
           BASE_TAGS: "${{ env.BASE_TAGS }}"
           CONTAINER_REGISTRIES: "${{ env.CONTAINER_REGISTRIES }}"
         run: |
-          set +e
           IFS=',' read -ra IMAGES <<< "${CONTAINER_REGISTRIES}"
           IFS=',' read -ra TAGS <<< "${BASE_TAGS}"
+
+          TAG_ARGS=()
           for img in "${IMAGES[@]}"; do
             for tag in "${TAGS[@]}"; do
-              echo "Creating manifest for ${img}:${tag}${BASE_IMAGE_TAG}"
-
-              OUTPUT=$(docker buildx imagetools create \
-                -t "${img}:${tag}${BASE_IMAGE_TAG}" \
-                $(printf "${img}@sha256:%s " *) 2>&1)
-              STATUS=$?
-
-              if [ ${STATUS} -ne 0 ]; then
-                echo "Manifest creation failed for ${img}:${tag}${BASE_IMAGE_TAG}"
-                echo "${OUTPUT}"
-              exit ${STATUS}
-              fi
-
-              echo "Manifest created for ${img}:${tag}${BASE_IMAGE_TAG}"
-              echo "${OUTPUT}"
+              TAG_ARGS+=("-t" "${img}:${tag}")
             done
           done
-          set -e
+
+          echo "Creating manifest"
+          if ! OUTPUT=$(docker buildx imagetools create \
+                          "${TAG_ARGS[@]}" \
+                          $(printf "${IMAGES[0]}@sha256:%s " *) 2>&1); then
+            echo "Manifest creation failed"
+            echo "${OUTPUT}"
+            exit 1
+          fi
+
+          echo "Manifest created successfully"
+          echo "${OUTPUT}"
 
           # Extract digest SHA for subsequent steps
           GET_DIGEST_SHA="$(echo "${OUTPUT}" | grep -oE 'sha256:[a-f0-9]{64}' | tail -1)"
@@ -360,7 +358,7 @@ jobs:
       # Attest container images
       - name: Attest - docker.io - ${{ matrix.base_image }}
         if: ${{ env.HAVE_DOCKERHUB_LOGIN == 'true' && env.DIGEST_SHA != ''}}
-        uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8 # v3.1.0
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-name: ${{ vars.DOCKERHUB_REPO }}
           subject-digest: ${{ env.DIGEST_SHA }}
@@ -368,7 +366,7 @@ jobs:
 
       - name: Attest - ghcr.io - ${{ matrix.base_image }}
         if: ${{ env.HAVE_GHCR_LOGIN == 'true' && env.DIGEST_SHA != ''}}
-        uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8 # v3.1.0
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-name: ${{ vars.GHCR_REPO }}
           subject-digest: ${{ env.DIGEST_SHA }}
@@ -376,7 +374,7 @@ jobs:
 
       - name: Attest - quay.io - ${{ matrix.base_image }}
         if: ${{ env.HAVE_QUAY_LOGIN == 'true' && env.DIGEST_SHA != ''}}
-        uses: actions/attest-build-provenance@00014ed6ed5efc5b1ab7f7f34a39eb55d41aa4f8 # v3.1.0
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
           subject-name: ${{ vars.QUAY_REPO }}
           subject-digest: ${{ env.DIGEST_SHA }}
